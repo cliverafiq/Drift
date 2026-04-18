@@ -12,6 +12,9 @@ export function Dashboard({
   scores,
   typing,
   attention,
+  facialFeat,
+  fatigue,
+  userState,
   podData,
   history,
   sessionActive,
@@ -24,10 +27,49 @@ export function Dashboard({
     break: 'text-red-400 border-red-800 bg-red-950',
   };
 
+  const stateStyles = {
+    ACTIVE_TYPING:  'text-blue-300 bg-blue-950 border-blue-800',
+    THINKING_PAUSE: 'text-purple-300 bg-purple-950 border-purple-800',
+    READING:        'text-teal-300 bg-teal-950 border-teal-800',
+    DISTRACTED:     'text-yellow-300 bg-yellow-950 border-yellow-800',
+    FATIGUED_DRIFT: 'text-red-300 bg-red-950 border-red-800',
+    AWAY:           'text-gray-400 bg-gray-900 border-gray-700',
+    UNKNOWN:        'text-gray-400 bg-gray-900 border-gray-800',
+  };
+
   const noisePct = Math.min(Math.round((podData.noise / 2048) * 100), 100);
+
+  const baseline = fatigue?.baseline;
+  const recent = fatigue?.recent;
+  const wpmDeltaPct = baseline && recent
+    ? Math.round(((recent.wpm - baseline.wpm) / baseline.wpm) * 100)
+    : null;
 
   return (
     <div className="space-y-6">
+      {/* State pill row */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium ${stateStyles[userState?.state] || stateStyles.UNKNOWN}`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-current" />
+          {userState?.label || 'Warming up'}
+        </div>
+        {fatigue?.baselineReady ? (
+          <div className="text-[11px] text-gray-500">
+            session baseline: <span className="text-gray-300">{Math.round(baseline.wpm)} wpm</span>
+            {wpmDeltaPct !== null && (
+              <span className={`ml-2 ${wpmDeltaPct < -10 ? 'text-red-400' : wpmDeltaPct < 0 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                now {Math.round(recent.wpm)} wpm ({wpmDeltaPct > 0 ? '+' : ''}{wpmDeltaPct}%)
+              </span>
+            )}
+            <span className="ml-2">· fatigue trajectory: <span className="text-gray-300">{fatigueScore}</span></span>
+          </div>
+        ) : (
+          <div className="text-[11px] text-gray-600">
+            building session baseline · {Math.max(0, Math.ceil(5 - (fatigue?.sessionMinutes ?? 0)))}m left
+          </div>
+        )}
+      </div>
+
       {/* Score cards */}
       <div className="grid grid-cols-2 gap-4">
         <ScoreCard label="Focus"   value={focusScore}   color="blue" />
@@ -64,6 +106,16 @@ export function Dashboard({
           hint={podData.alive ? 'live' : (podData.connected ? 'silent' : 'offline')}
         />
       </div>
+
+      {/* Strain signals (facial trajectory) */}
+      {facialFeat?.baselineReady && (
+        <div className="grid grid-cols-4 gap-3">
+          <StrainBar label="Brow furrow"  value={facialFeat.browFurrow} />
+          <StrainBar label="Lid droop"    value={facialFeat.lidDroop} />
+          <StrainBar label="Head drop"    value={Math.min(1, facialFeat.headPitch * 5)} />
+          <StrainBar label="Mouth / yawn" value={Math.min(1, facialFeat.mouthOpen * 10)} />
+        </div>
+      )}
 
       {/* Timeline */}
       {history.length > 1 && (
@@ -140,6 +192,23 @@ function ScoreCard({ label, value, color, invert }) {
           className={`h-full rounded-full transition-all duration-500 ${palette.bar}`}
           style={{ width: `${Math.max(0, Math.min(100, barWidth))}%` }}
         />
+      </div>
+    </div>
+  );
+}
+
+function StrainBar({ label, value }) {
+  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
+  const barColor = pct > 60 ? 'bg-red-500' : pct > 30 ? 'bg-yellow-500' : 'bg-gray-600';
+  return (
+    <div className="bg-gray-900 rounded-lg p-3">
+      <p className="text-[10px] text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
+      <div className="flex items-baseline gap-1">
+        <span className="text-base text-gray-200 font-medium">{pct}</span>
+        <span className="text-[10px] text-gray-500">/100</span>
+      </div>
+      <div className="mt-1.5 h-1 bg-gray-800 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );

@@ -1,13 +1,16 @@
 import { useRef, useState, useEffect } from 'react';
-import { useTypingTelemetry } from './hooks/useTypingTelemetry';
-import { useWebcamAttention } from './hooks/useWebcamAttention';
-import { useSerialPod }       from './hooks/useSerialPod';
-import { useScoreFusion }     from './hooks/useScoreFusion';
-import { useCalibration }     from './hooks/useCalibration';
-import { useFallbackPod }     from './hooks/useFallbackPod';
-import { Dashboard }          from './components/Dashboard';
-import { SessionSummary }     from './components/SessionSummary';
-import { CalibrationModal }   from './components/CalibrationModal';
+import { useTypingTelemetry }   from './hooks/useTypingTelemetry';
+import { useWebcamAttention }   from './hooks/useWebcamAttention';
+import { useFacialFeatures }    from './hooks/useFacialFeatures';
+import { useFatigueTrajectory } from './hooks/useFatigueTrajectory';
+import { useUserState }         from './hooks/useUserState';
+import { useSerialPod }         from './hooks/useSerialPod';
+import { useScoreFusion }       from './hooks/useScoreFusion';
+import { useCalibration }       from './hooks/useCalibration';
+import { useFallbackPod }       from './hooks/useFallbackPod';
+import { Dashboard }            from './components/Dashboard';
+import { SessionSummary }       from './components/SessionSummary';
+import { CalibrationModal }     from './components/CalibrationModal';
 
 export default function App() {
   const videoRef = useRef(null);
@@ -17,14 +20,25 @@ export default function App() {
   const [fallback, setFallback] = useState(false);
   const startTimeRef = useRef(null);
 
-  const typing    = useTypingTelemetry();
-  const attention = useWebcamAttention(videoRef);
+  const typing      = useTypingTelemetry();
+  const attention   = useWebcamAttention(videoRef);
+  const facialFeat  = useFacialFeatures(attention.landmarks);
+  const fatigue     = useFatigueTrajectory({ typing, attention, facialFeat });
+  const userState   = useUserState({ typing, attention, facialFeat });
   const { podData: realPod, connect, sendFocusScore } = useSerialPod();
-  const fakePod   = useFallbackPod(fallback);
-  const pod       = fallback ? fakePod : realPod;
+  const fakePod     = useFallbackPod(fallback);
+  const pod         = fallback ? fakePod : realPod;
 
   const { calibration, calibrating, startCalibration } = useCalibration();
-  const scores = useScoreFusion(typing, attention, pod, calibration);
+  const scores = useScoreFusion({
+    typing,
+    attention,
+    podData: pod,
+    calibration,
+    facialFeat,
+    fatigue,
+    userState,
+  });
 
   // Latest-values ref so the snapshot interval doesn't need to depend on `scores`
   const latest = useRef({ scores, fallback });
@@ -147,6 +161,9 @@ export default function App() {
             scores={scores}
             typing={typing}
             attention={attention}
+            facialFeat={facialFeat}
+            fatigue={fatigue}
+            userState={userState}
             podData={pod}
             history={history}
             sessionActive={sessionActive}

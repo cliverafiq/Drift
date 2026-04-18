@@ -3,9 +3,9 @@
  * StarkHacks 2026
  *
  * Wiring:
- *   KY-037   VCC -> 3.3V,  GND -> GND,  AO  -> GPIO34
- *   OLED     VCC -> 3.3V,  GND -> GND,  SDA -> GPIO21,  SCL -> GPIO22
- *   LDR      one leg -> 3.3V, other leg -> GPIO35 AND 10k to GND
+ *   KY-037   VCC -> 3.3V,  GND -> GND,  AO  -> GPIO4
+ *   OLED     VCC -> 3.3V,  GND -> GND,  SDA -> GPIO8,  SCL -> GPIO9
+ *   LDR      one leg -> 3.3V, other leg -> GPIO5 AND 10k to GND
  *
  * Serial protocol:
  *   -> BOOT                    at power up
@@ -27,8 +27,8 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool oledOK = false;
 
-#define MIC_PIN          34
-#define LDR_PIN          35
+#define MIC_PIN          4
+#define LDR_PIN          5
 #define SAMPLE_INTERVAL  2000    // ms between DATA: lines
 #define MIC_WINDOW_MS    40      // sample window for peak-to-peak
 #define HEARTBEAT_MS     5000    // emit "READY" periodically
@@ -47,7 +47,7 @@ void setup() {
   delay(300);
   Serial.println("BOOT");
 
-  Wire.begin(21, 22);
+  Wire.begin(8, 9);
   if (display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     oledOK = true;
     display.clearDisplay();

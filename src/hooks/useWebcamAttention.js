@@ -39,6 +39,7 @@ export function useWebcamAttention(videoRef) {
     faceDetected: false,
     loading: true,
     error: null,
+    landmarks: null,   // raw FaceMesh landmarks for downstream hooks
   });
 
   const blinkTimes  = useRef([]);
@@ -93,6 +94,7 @@ export function useWebcamAttention(videoRef) {
             gazeScore: 0,
             faceDetected: false,
             loading: false,
+            landmarks: null,
           }));
           return;
         }
@@ -126,6 +128,7 @@ export function useWebcamAttention(videoRef) {
           faceDetected: true,
           loading: false,
           error: null,
+          landmarks: lm,
         });
       });
 
