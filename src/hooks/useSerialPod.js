@@ -116,6 +116,14 @@ export function useSerialPod() {
     try { await w.write(`BUZZ:${clamped}\n`); } catch (_) {}
   }, []);
 
+  // Manually set the mode from the UI (useful for demo fallback when the
+  // encoder isn't wired, or for a "reset to STUDY" affordance). Just flips
+  // local state — the pod stays on whatever its own knob says.
+  const setMode = useCallback((m) => {
+    if (!MODE_SET.has(m)) return;
+    setPodData(prev => ({ ...prev, mode: m, pendingMode: m }));
+  }, []);
+
   // Aliveness watchdog — if no line for 8s, mark pod not alive
   useEffect(() => {
     const id = setInterval(() => {
@@ -140,5 +148,5 @@ export function useSerialPod() {
     };
   }, []);
 
-  return { podData, connect, sendFocusScore, sendBuzz };
+  return { podData, connect, sendFocusScore, sendBuzz, setMode };
 }

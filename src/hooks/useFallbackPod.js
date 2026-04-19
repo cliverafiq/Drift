@@ -13,6 +13,8 @@ export function useFallbackPod(enabled) {
     connected: true,
     alive: true,
     supported: true,
+    mode: 'STUDY',
+    pendingMode: 'STUDY',
   });
 
   useEffect(() => {
@@ -21,7 +23,14 @@ export function useFallbackPod(enabled) {
       const t = Date.now() / 8000;
       const noise = Math.round(250 + Math.sin(t) * 120 + Math.random() * 80);
       const light = Math.round(2200 + Math.sin(t / 3) * 300);
-      setData({ noise, light, connected: true, alive: true, supported: true });
+      setData(prev => ({
+        ...prev,
+        noise,
+        light,
+        connected: true,
+        alive: true,
+        supported: true,
+      }));
     }, 2000);
     return () => clearInterval(id);
   }, [enabled]);
