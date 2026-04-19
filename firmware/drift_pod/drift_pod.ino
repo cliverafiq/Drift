@@ -8,7 +8,9 @@
  *   LDR      one leg -> 3.3V, other leg -> GPIO5 AND 10k to GND
  *   BUZZ     + -> GPIO15,    - -> GND   (active piezo buzzer, direct drive)
  *   KY-040   VCC -> 3.3V,  GND -> GND,
- *            CLK -> GPIO32, DT -> GPIO33, SW -> GPIO7 (pulled up internal)
+ *            CLK -> GPIO10, DT -> GPIO11, SW -> GPIO12 (pulled up internal)
+ *            Note: on ESP32-S3-WROOM-1, GPIOs 26-32 are reserved for SPI
+ *            flash and NOT routed out of the module, so use 10/11/12.
  *
  * Serial protocol:
  *   -> BOOT                    at power up
@@ -43,9 +45,12 @@ bool oledOK = false;
 #define HEARTBEAT_MS     2000    // emit "READY" periodically
 
 // --- KY-040 rotary encoder ---
-#define ENC_CLK          32
-#define ENC_DT           33
-#define ENC_SW           7
+// ESP32-S3-WROOM-1 reserves GPIOs 26-32 for internal SPI flash, so those
+// pads are not on the module. 10/11/12 are general-purpose GPIOs with no
+// strapping/USB conflicts, and are free in this firmware.
+#define ENC_CLK          10
+#define ENC_DT           11
+#define ENC_SW           12
 #define ENC_DEBOUNCE_MS  2       // min gap between accepted CLK transitions
 #define BTN_DEBOUNCE_MS  40      // min hold before press registers
 #define MODE_FLASH_MS    1000    // OLED shows mode for this long after change
