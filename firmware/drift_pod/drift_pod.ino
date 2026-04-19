@@ -6,12 +6,14 @@
  *   KY-037   VCC -> 3.3V,  GND -> GND,  AO  -> GPIO4
  *   OLED     VCC -> 3.3V,  GND -> GND,  SDA -> GPIO8,  SCL -> GPIO9
  *   LDR      one leg -> 3.3V, other leg -> GPIO5 AND 10k to GND
+ *   BUZZ     + -> GPIO15,    - -> GND   (active piezo buzzer, direct drive)
  *
  * Serial protocol:
  *   -> BOOT                    at power up
  *   -> READY                   heartbeat every 5s
  *   -> DATA:<noise>,<light>    every 2s (0..4095 each)
  *   <- FOCUS:<0..100>          updates the OLED
+ *   <- BUZZ:<ms>               sound the buzzer for ms (clamped 30..2000)
  *   <- PING                    replied with PONG
  */
 
@@ -29,14 +31,19 @@ bool oledOK = false;
 
 #define MIC_PIN          4
 #define LDR_PIN          5
-#define SAMPLE_INTERVAL  2000    // ms between DATA: lines
+#define BUZZ_PIN         16
+#define BUZZ_MIN_MS      30
+#define BUZZ_MAX_MS      500
+#define SAMPLE_INTERVAL  500    // ms between DATA: lines
 #define MIC_WINDOW_MS    40      // sample window for peak-to-peak
-#define HEARTBEAT_MS     5000    // emit "READY" periodically
+#define HEARTBEAT_MS     2000    // emit "READY" periodically
 
 unsigned long lastSample    = 0;
 unsigned long lastHeartbeat = 0;
-int  lastFocusScore = 0;
-bool hasScore       = false;
+unsigned long buzzUntil     = 0;     // millis() deadline to silence buzzer
+bool buzzActive      = false;
+int  lastFocusScore  = 0;
+bool hasScore        = false;
 
 void showSplash();
 void showScore(int score);
@@ -46,6 +53,9 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println("BOOT");
+
+  pinMode(BUZZ_PIN, OUTPUT);
+  digitalWrite(BUZZ_PIN, LOW);
 
   Wire.begin(8, 9);
   if (display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
@@ -72,12 +82,25 @@ void loop() {
         hasScore = true;
         if (oledOK) showScore(lastFocusScore);
       }
+    } else if (incoming.startsWith("BUZZ:")) {
+      int ms = incoming.substring(5).toInt();
+      if (ms < BUZZ_MIN_MS) ms = BUZZ_MIN_MS;
+      if (ms > BUZZ_MAX_MS) ms = BUZZ_MAX_MS;
+      digitalWrite(BUZZ_PIN, HIGH);
+      buzzActive = true;
+      buzzUntil  = millis() + (unsigned long)ms;
     } else if (incoming == "PING") {
       Serial.println("PONG");
     }
   }
 
   unsigned long now = millis();
+
+  // --- Buzzer auto-off (non-blocking) ---
+  if (buzzActive && (long)(now - buzzUntil) >= 0) {
+    digitalWrite(BUZZ_PIN, LOW);
+    buzzActive = false;
+  }
 
   // --- Outbound: sensor data ---
   if (now - lastSample >= SAMPLE_INTERVAL) {

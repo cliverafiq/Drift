@@ -25,7 +25,7 @@ export default function App() {
   const facialFeat  = useFacialFeatures(attention.landmarks);
   const fatigue     = useFatigueTrajectory({ typing, attention, facialFeat });
   const userState   = useUserState({ typing, attention, facialFeat });
-  const { podData: realPod, connect, sendFocusScore } = useSerialPod();
+  const { podData: realPod, connect, sendFocusScore, sendBuzz } = useSerialPod();
   const fakePod     = useFallbackPod(fallback);
   const pod         = fallback ? fakePod : realPod;
 
@@ -43,6 +43,63 @@ export default function App() {
   // Latest-values ref so the snapshot interval doesn't need to depend on `scores`
   const latest = useRef({ scores, fallback });
   useEffect(() => { latest.current = { scores, fallback }; }, [scores, fallback]);
+
+  // --- Audible nudges ---
+  // Behavior: on entering DISTRACTED or FATIGUED_DRIFT, fire a first beep,
+  // then keep pulsing a short blip until the user returns to a focused state.
+  // Low-focus dips get a single one-shot nudge (no nagging) so we don't
+  // over-alert when numbers are noisy.
+  const buzzRef = useRef({
+    prevFocus: null,
+    lowSince:  null,
+  });
+
+  // Nag loop while in a "bad" state: beeps until the state flips back.
+  useEffect(() => {
+    if (!sessionActive || !pod.connected || !pod.alive) return;
+
+    const isDistracted = userState.state === 'DISTRACTED';
+    const isFatigued   = userState.state === 'FATIGUED_DRIFT';
+    if (!isDistracted && !isFatigued) return;
+
+    // 1) First beep — fires immediately on entry.
+    const firstMs = isFatigued ? 200 : 120;
+    sendBuzz(firstMs);
+
+    // 2) Rapid nag pulses until state changes. Fatigued is more urgent.
+    const pulseMs    = isFatigued ? 80  : 60;
+    const intervalMs = isFatigued ? 500 : 700;
+
+    const id = setInterval(() => {
+      sendBuzz(pulseMs);
+    }, intervalMs);
+
+    return () => clearInterval(id);
+  }, [userState.state, sessionActive, pod.connected, pod.alive, sendBuzz]);
+
+  // One-shot low-focus dip: cross from >=50 down below 40 and stay low ~10s.
+  useEffect(() => {
+    if (!sessionActive || !pod.connected || !pod.alive) return;
+
+    const now = Date.now();
+    const b   = buzzRef.current;
+    const f   = scores.focusScore;
+
+    if (typeof f !== 'number') return;
+
+    if (f < 40) {
+      if (b.lowSince === null && (b.prevFocus == null || b.prevFocus >= 50)) {
+        b.lowSince = now;
+      }
+      if (b.lowSince !== null && now - b.lowSince >= 10_000) {
+        sendBuzz(150);
+        b.lowSince = null; // only fire once per dip
+      }
+    } else if (f >= 50) {
+      b.lowSince = null; // recovered
+    }
+    b.prevFocus = f;
+  }, [scores.focusScore, sessionActive, pod.connected, pod.alive, sendBuzz]);
 
   // Snapshot every 10s during a session
   useEffect(() => {

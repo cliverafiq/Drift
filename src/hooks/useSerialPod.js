@@ -91,6 +91,13 @@ export function useSerialPod() {
     try { await w.write(`FOCUS:${Math.round(score)}\n`); } catch (_) {}
   }, []);
 
+  const sendBuzz = useCallback(async (ms) => {
+    const w = writerRef.current;
+    if (!w) return;
+    const clamped = Math.max(30, Math.min(2000, Math.round(ms)));
+    try { await w.write(`BUZZ:${clamped}\n`); } catch (_) {}
+  }, []);
+
   // Aliveness watchdog — if no line for 8s, mark pod not alive
   useEffect(() => {
     const id = setInterval(() => {
@@ -115,5 +122,5 @@ export function useSerialPod() {
     };
   }, []);
 
-  return { podData, connect, sendFocusScore };
+  return { podData, connect, sendFocusScore, sendBuzz };
 }

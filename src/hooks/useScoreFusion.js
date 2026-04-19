@@ -21,13 +21,13 @@ import { STATES } from './useUserState';
 const OUT_ALPHA = 0.25;
 
 const STATE_WEIGHTS = {
-  [STATES.ACTIVE_TYPING]:  { typingSpeed: 0.25, typingConsistency: 0.25, gaze: 0.30, expression: 0.10, noise: 0.10 },
-  [STATES.THINKING_PAUSE]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.60, expression: 0.25, noise: 0.15 },
-  [STATES.READING]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.55, expression: 0.30, noise: 0.15 },
-  [STATES.DISTRACTED]:     { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.70, expression: 0.15, noise: 0.15 },
-  [STATES.FATIGUED_DRIFT]: { typingSpeed: 0.15, typingConsistency: 0.15, gaze: 0.20, expression: 0.40, noise: 0.10 },
+  [STATES.ACTIVE_TYPING]:  { typingSpeed: 0.25, typingConsistency: 0.25, gaze: 0.30, expression: 0.10, noise: 0.05, light: 0.05 },
+  [STATES.THINKING_PAUSE]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.60, expression: 0.25, noise: 0.10, light: 0.05 },
+  [STATES.READING]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.55, expression: 0.30, noise: 0.10, light: 0.05 },
+  [STATES.DISTRACTED]:     { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.70, expression: 0.15, noise: 0.10, light: 0.05 },
+  [STATES.FATIGUED_DRIFT]: { typingSpeed: 0.15, typingConsistency: 0.15, gaze: 0.20, expression: 0.40, noise: 0.05, light: 0.05 },
   [STATES.AWAY]:           null, // hold last value
-  [STATES.UNKNOWN]:        { typingSpeed: 0.20, typingConsistency: 0.20, gaze: 0.40, expression: 0.10, noise: 0.10 },
+  [STATES.UNKNOWN]:        { typingSpeed: 0.20, typingConsistency: 0.20, gaze: 0.40, expression: 0.10, noise: 0.05, light: 0.05 },
 };
 
 export function useScoreFusion({
@@ -70,7 +70,11 @@ export function useScoreFusion({
 
     const noise = Math.max(0, 100 - Math.min(100, (podData.noise - 200) / 20));
 
-    const components = { typingSpeed, typingConsistency, gaze, expression, noise };
+    // Ambient light: ramp 0 at raw ≤200 (very dim) → 100 at raw ≥1500 (well-lit).
+    // Tune the constants to your LDR wiring; high raw = bright (pulldown config).
+    const light = Math.max(0, Math.min(100, ((podData.light ?? 0) - 200) / 13));
+
+    const components = { typingSpeed, typingConsistency, gaze, expression, noise, light };
 
     // ── State-weighted focus ──
     const weights = STATE_WEIGHTS[userState.state] ?? STATE_WEIGHTS[STATES.UNKNOWN];
@@ -85,7 +89,8 @@ export function useScoreFusion({
         weights.typingConsistency * typingConsistency +
         weights.gaze              * gaze +
         weights.expression        * expression +
-        weights.noise             * noise;
+        weights.noise             * noise +
+        weights.light             * light;
       // Fatigue shaves up to 40 pts
       focusTarget = Math.max(0, Math.min(100, weighted - fatigue.fatigueScore * 0.4));
     }

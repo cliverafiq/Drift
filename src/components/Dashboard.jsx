@@ -38,6 +38,10 @@ export function Dashboard({
   };
 
   const noisePct = Math.min(Math.round((podData.noise / 2048) * 100), 100);
+  const lightPct = Math.min(Math.round((podData.light / 4095) * 100 * 6), 100);
+  const lightHint = podData.alive
+    ? (lightPct < 20 ? 'dim — eye strain risk' : 'good')
+    : (podData.connected ? 'silent' : 'offline');
 
   const baseline = fatigue?.baseline;
   const recent = fatigue?.recent;
@@ -65,7 +69,7 @@ export function Dashboard({
           </div>
         ) : (
           <div className="text-[11px] text-gray-600">
-            building session baseline · {Math.max(0, Math.ceil(5 - (fatigue?.sessionMinutes ?? 0)))}m left
+            building session baseline · {fatigue?.baselineSecondsLeft ?? 45}s left
           </div>
         )}
       </div>
@@ -82,7 +86,7 @@ export function Dashboard({
       </div>
 
       {/* Signal breakdown */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         <SignalPill
           label="Typing WPM"
           value={typing.wpm}
@@ -104,6 +108,14 @@ export function Dashboard({
           max={100}
           invert
           hint={podData.alive ? 'live' : (podData.connected ? 'silent' : 'offline')}
+        />
+        <SignalPill
+          label="Room light"
+          value={lightPct}
+          unit="%"
+          max={100}
+          badBelow={20}
+          hint={lightHint}
         />
       </div>
 
@@ -214,9 +226,9 @@ function StrainBar({ label, value }) {
   );
 }
 
-function SignalPill({ label, value, unit, max, invert, hint }) {
+function SignalPill({ label, value, unit, max, invert, hint, badBelow = 40, badAbove = 60 }) {
   const pct = Math.min((value / max) * 100, 100);
-  const isBad = invert ? pct > 60 : pct < 40;
+  const isBad = invert ? pct > badAbove : pct < badBelow;
   return (
     <div className="bg-gray-900 rounded-xl p-4">
       <p className="text-xs text-gray-500 mb-1">{label}</p>

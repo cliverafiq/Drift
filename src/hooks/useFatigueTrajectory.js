@@ -17,9 +17,9 @@ import { useRef, useState, useEffect } from 'react';
  * WPM drop at 10 minutes is noise, at 50 minutes it's real.
  */
 
-const BASELINE_MS = 5 * 60 * 1000; // 5 min to establish session baseline
+const BASELINE_MS = 45 * 1000;     // 45s to establish session baseline
 const SAMPLE_MS   = 1000;
-const EMA_ALPHA   = 0.1;
+const EMA_ALPHA   = 0.15;          // slightly responsive so fatigue tracks changes
 
 export function useFatigueTrajectory({ typing, attention, facialFeat }) {
   const [out, setOut] = useState({
@@ -74,7 +74,7 @@ export function useFatigueTrajectory({ typing, attention, facialFeat }) {
       const b = baselineRef.current;
       if (!b.frozen && elapsed < BASELINE_MS) {
         b.samples.push(sample);
-      } else if (!b.frozen && b.samples.length > 10) {
+      } else if (!b.frozen && b.samples.length >= 15) {
         const avg = (k) => {
           const vals = b.samples.map(s => s[k]).filter(v => Number.isFinite(v));
           return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0;
@@ -98,7 +98,9 @@ export function useFatigueTrajectory({ typing, attention, facialFeat }) {
       }
       const recent = { ...emaRef.current };
 
-      const durationMultiplier = Math.min(1.5, Math.max(1, 1 + (sessionMinutes - 5) * 0.01));
+      // Starts ramping after the 1-minute mark (just past baseline freeze).
+      const durationMultiplier = Math.min(1.5, Math.max(1, 1 + (sessionMinutes - 1) * 0.02));
+      const baselineSecondsLeft = Math.max(0, Math.ceil((BASELINE_MS - elapsed) / 1000));
 
       // ---- Compute deltas and score ----
       let fatigueScore = 0;
@@ -143,6 +145,7 @@ export function useFatigueTrajectory({ typing, attention, facialFeat }) {
         recent,
         deltas,
         sessionMinutes,
+        baselineSecondsLeft,
         durationMultiplier,
       });
     }, SAMPLE_MS);
