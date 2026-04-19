@@ -101,7 +101,7 @@ export default function App() {
     b.prevFocus = f;
   }, [scores.focusScore, sessionActive, pod.connected, pod.alive, sendBuzz]);
 
-  // Snapshot every 10s during a session
+  // Snapshot every 10s during a session — only for the history chart.
   useEffect(() => {
     if (!sessionActive) return;
     const id = setInterval(() => {
@@ -114,8 +114,23 @@ export default function App() {
         focus: s.focusScore,
         fatigue: s.fatigueScore,
       }]);
-      sendFocusScore(s.focusScore);
     }, 10000);
+    return () => clearInterval(id);
+  }, [sessionActive]);
+
+  // Push FOCUS to the pod frequently so the OLED + LED strip react in near
+  // real-time. We also dedupe: only resend when the integer score actually
+  // changed, which keeps the serial link quiet during steady sessions.
+  useEffect(() => {
+    if (!sessionActive) return;
+    let lastSent = null;
+    const id = setInterval(() => {
+      const { scores: s } = latest.current;
+      if (typeof s.focusScore !== 'number') return;
+      if (s.focusScore === lastSent) return;
+      lastSent = s.focusScore;
+      sendFocusScore(s.focusScore);
+    }, 1000);
     return () => clearInterval(id);
   }, [sessionActive, sendFocusScore]);
 

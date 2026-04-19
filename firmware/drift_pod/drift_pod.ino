@@ -3,14 +3,19 @@
  * StarkHacks 2026
  *
  * Wiring:
- *   KY-037   VCC -> 3.3V,  GND -> GND,  AO  -> GPIO4
+ *   KY-037   VCC -> 3.3V,  GND -> GND,  AO  -> GPIO1
+ *            (was on GPIO4; moved so the LED strip can own that pin.)
  *   OLED     VCC -> 3.3V,  GND -> GND,  SDA -> GPIO8,  SCL -> GPIO9
  *   LDR      one leg -> 3.3V, other leg -> GPIO5 AND 10k to GND
- *   BUZZ     + -> GPIO15,    - -> GND   (active piezo buzzer, direct drive)
+ *   BUZZ     + -> GPIO16,    - -> GND   (active piezo buzzer, direct drive)
  *   KY-040   VCC -> 3.3V,  GND -> GND,
  *            CLK -> GPIO10, DT -> GPIO11, SW -> GPIO12 (pulled up internal)
  *            Note: on ESP32-S3-WROOM-1, GPIOs 26-32 are reserved for SPI
  *            flash and NOT routed out of the module, so use 10/11/12.
+ *   WS2812B  +5V -> 5V (USB rail), GND -> GND,
+ *            DIN -> GPIO4 via 470Ω series resistor.
+ *            Keep LED_BRIGHT modest — 8 pixels @ full white ≈ 480 mA and
+ *            will brown-out a laptop-powered dev board.
  *
  * Serial protocol:
  *   -> BOOT                    at power up
@@ -18,7 +23,7 @@
  *   -> DATA:<noise>,<light>    every 2s (0..4095 each)
  *   -> MODE_PREVIEW:<name>     while rotating the knob (not yet committed)
  *   -> MODE:<name>             when the knob is pressed (committed)
- *   <- FOCUS:<0..100>          updates the OLED
+ *   <- FOCUS:<0..100>          updates the OLED + LED color
  *   <- BUZZ:<ms>               sound the buzzer for ms (clamped 30..2000)
  *   <- PING                    replied with PONG
  */
@@ -26,6 +31,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Adafruit_NeoPixel.h>
 
 #define SCREEN_WIDTH   128
 #define SCREEN_HEIGHT  64
@@ -35,7 +41,7 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool oledOK = false;
 
-#define MIC_PIN          4
+#define MIC_PIN          1       // KY-037 AO; moved off GPIO4 to free it for the LED strip
 #define LDR_PIN          5
 #define BUZZ_PIN         16
 #define BUZZ_MIN_MS      30
@@ -43,6 +49,19 @@ bool oledOK = false;
 #define SAMPLE_INTERVAL  500    // ms between DATA: lines
 #define MIC_WINDOW_MS    40      // sample window for peak-to-peak
 #define HEARTBEAT_MS     2000    // emit "READY" periodically
+
+// --- WS2812B ambient LED strip ---
+// Data in on GPIO4 through a 470Ω series resistor (protects the first pixel
+// from ringing on the 3.3V→5V logic edge). Power is from the board's 5V rail.
+// We drive the whole strip as one block — fancier per-pixel animations aren't
+// worth the loop() budget given we're also running mic peak-to-peak windows.
+#define LED_PIN          4
+#define LED_COUNT        8       // change this to match your physical strip
+#define LED_BRIGHT       60      // 0..255 — keep modest to avoid USB brown-out
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+unsigned long ledModeFlashUntil = 0; // while >0 we're showing a mode color
+uint32_t      ledBaseColor      = 0; // last steady (focus) color, restored after flash
 
 // --- KY-040 rotary encoder ---
 // ESP32-S3-WROOM-1 reserves GPIOs 26-32 for internal SPI flash, so those
@@ -80,6 +99,12 @@ void showMode(const char* name, bool committed);
 void setupEncoder();
 void readEncoder(unsigned long now);
 int  readMicPeakToPeak();
+void     setupLeds();
+void     ledsFill(uint32_t color);
+uint32_t focusColor(int score);
+uint32_t modeColor(int modeIdx);
+void     showFocusLeds(int score);
+void     flashModeLeds(int modeIdx, unsigned long now);
 
 void setup() {
   Serial.begin(115200);
@@ -101,6 +126,7 @@ void setup() {
   }
 
   setupEncoder();
+  setupLeds();
 }
 
 void loop() {
@@ -116,6 +142,9 @@ void loop() {
         hasScore = true;
         // Don't clobber the mode-flash screen while it's up.
         if (oledOK && modeFlashUntil == 0) showScore(lastFocusScore);
+        // LEDs: showFocusLeds() updates ledBaseColor and only paints the
+        // strip if a mode flash isn't currently latched.
+        showFocusLeds(lastFocusScore);
       }
     } else if (incoming.startsWith("BUZZ:")) {
       int ms = incoming.substring(5).toInt();
@@ -141,6 +170,12 @@ void loop() {
       if (hasScore) showScore(lastFocusScore);
       else          showSplash();
     }
+  }
+
+  // --- LED flash auto-clear: repaint the steady focus color when done ---
+  if (ledModeFlashUntil != 0 && (long)(now - ledModeFlashUntil) >= 0) {
+    ledModeFlashUntil = 0;
+    ledsFill(ledBaseColor);
   }
 
   // --- Buzzer auto-off (non-blocking) ---
@@ -284,6 +319,7 @@ void readEncoder(unsigned long now) {
 
     if (oledOK) showMode(MODE_NAMES[committedMode], true);
     modeFlashUntil = now + MODE_FLASH_MS;
+    flashModeLeds(committedMode, now);
     btnLatched = true;
   }
   if (btn == HIGH) {
@@ -314,4 +350,64 @@ void showMode(const char* name, bool committed) {
   display.print(committed ? "click-confirmed" : "click to confirm");
 
   display.display();
+}
+
+// ─────────────────────────────────────────────────────────
+// WS2812B ambient strip
+//
+// The strip acts as an at-a-glance focus indicator so you don't have to be
+// looking at your screen to know the pod is watching. Color comes from the
+// last FOCUS: value the browser pushed us:
+//   ≥70  green        "on track"
+//   40-69 amber       "drifting, not gone"
+//   <40   red         "take a break / refocus"
+//
+// On a mode commit we briefly overwrite the color with a mode-specific tint
+// (STUDY=blue, READING=warm, PRESENT=magenta) for MODE_FLASH_MS, then the
+// base focus color is restored — same cadence as the OLED.
+// ─────────────────────────────────────────────────────────
+void setupLeds() {
+  strip.begin();
+  strip.setBrightness(LED_BRIGHT);
+  strip.clear();
+  strip.show();
+  ledBaseColor = strip.Color(40, 40, 60); // dim blue "booted, no data yet"
+  ledsFill(ledBaseColor);
+}
+
+void ledsFill(uint32_t color) {
+  for (int i = 0; i < LED_COUNT; i++) strip.setPixelColor(i, color);
+  strip.show();
+}
+
+uint32_t focusColor(int score) {
+  // Smooth gradient: red (score 0) → amber (~50) → green (100).
+  // 16-bit hue: 0 = red, ~21845 = green. Mapping 0..100 onto that range
+  // sweeps through the warm colors naturally, so even a 2–3 point focus
+  // delta produces a visible color shift instead of a bucket flip.
+  if (score < 0)   score = 0;
+  if (score > 100) score = 100;
+  uint16_t hue = (uint32_t)score * 21845 / 100;
+  return strip.gamma32(strip.ColorHSV(hue, 255, 255));
+}
+
+uint32_t modeColor(int modeIdx) {
+  // STUDY / READING / PRESENT
+  switch (modeIdx) {
+    case 0:  return strip.Color(30,  80,  220); // STUDY — blue
+    case 1:  return strip.Color(220, 120, 30);  // READING — warm amber
+    case 2:  return strip.Color(180, 30,  180); // PRESENT — magenta
+    default: return strip.Color(80,  80,  80);
+  }
+}
+
+void showFocusLeds(int score) {
+  ledBaseColor = focusColor(score);
+  // Don't clobber an active mode flash.
+  if (ledModeFlashUntil == 0) ledsFill(ledBaseColor);
+}
+
+void flashModeLeds(int modeIdx, unsigned long now) {
+  ledsFill(modeColor(modeIdx));
+  ledModeFlashUntil = now + MODE_FLASH_MS;
 }
