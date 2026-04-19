@@ -16,11 +16,22 @@ import { STATES } from './useUserState';
  *   - Distracted: gaze is almost everything
  *   - Fatigued drift: expression and fatigue dominate, typing penalized less
  *   - Away: hold last value (avoid score collapse during bio breaks)
+ *
+ * Mode overlays (set via the rotary knob on the pod):
+ *   - STUDY     — balanced default, used for general coding / writing work.
+ *   - READING   — gaze- and expression-dominant; typing contribution zeroed
+ *                 across all states (you're not supposed to be typing).
+ *   - PRESENT   — mic-on-screen mode; typing zeroed, expression + noise
+ *                 matter most (are you looking at your deck, is the room
+ *                 loud, are you tense).
+ *
+ * Every row still sums to 1.0 so mode switches don't change the score's
+ * overall scale.
  */
 
 const OUT_ALPHA = 0.25;
 
-const STATE_WEIGHTS = {
+const STUDY_WEIGHTS = {
   [STATES.ACTIVE_TYPING]:  { typingSpeed: 0.25, typingConsistency: 0.25, gaze: 0.30, expression: 0.10, noise: 0.05, light: 0.05 },
   [STATES.THINKING_PAUSE]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.60, expression: 0.25, noise: 0.10, light: 0.05 },
   [STATES.READING]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.55, expression: 0.30, noise: 0.10, light: 0.05 },
@@ -28,6 +39,37 @@ const STATE_WEIGHTS = {
   [STATES.FATIGUED_DRIFT]: { typingSpeed: 0.15, typingConsistency: 0.15, gaze: 0.20, expression: 0.40, noise: 0.05, light: 0.05 },
   [STATES.AWAY]:           null, // hold last value
   [STATES.UNKNOWN]:        { typingSpeed: 0.20, typingConsistency: 0.20, gaze: 0.40, expression: 0.10, noise: 0.05, light: 0.05 },
+};
+
+// Reading mode: typing contributions drop to 0; gaze dominates; light matters
+// more (dim pages = eye strain). Freed weight goes to gaze and expression.
+const READING_WEIGHTS = {
+  [STATES.ACTIVE_TYPING]:  { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.55, expression: 0.25, noise: 0.10, light: 0.10 },
+  [STATES.THINKING_PAUSE]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.60, expression: 0.20, noise: 0.10, light: 0.10 },
+  [STATES.READING]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.60, expression: 0.20, noise: 0.10, light: 0.10 },
+  [STATES.DISTRACTED]:     { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.75, expression: 0.10, noise: 0.05, light: 0.10 },
+  [STATES.FATIGUED_DRIFT]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.30, expression: 0.45, noise: 0.05, light: 0.20 },
+  [STATES.AWAY]:           null,
+  [STATES.UNKNOWN]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.60, expression: 0.20, noise: 0.10, light: 0.10 },
+};
+
+// Presentation mode: typing ignored. Expression (calm vs tense) and noise
+// (silent room = polished delivery) lead. Gaze still matters — you should
+// be looking at the screen/audience, not the laptop.
+const PRESENTATION_WEIGHTS = {
+  [STATES.ACTIVE_TYPING]:  { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.35, expression: 0.40, noise: 0.20, light: 0.05 },
+  [STATES.THINKING_PAUSE]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.35, expression: 0.40, noise: 0.20, light: 0.05 },
+  [STATES.READING]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.40, expression: 0.35, noise: 0.20, light: 0.05 },
+  [STATES.DISTRACTED]:     { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.55, expression: 0.20, noise: 0.20, light: 0.05 },
+  [STATES.FATIGUED_DRIFT]: { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.25, expression: 0.50, noise: 0.20, light: 0.05 },
+  [STATES.AWAY]:           null,
+  [STATES.UNKNOWN]:        { typingSpeed: 0.00, typingConsistency: 0.00, gaze: 0.40, expression: 0.35, noise: 0.20, light: 0.05 },
+};
+
+const WEIGHT_TABLES = {
+  STUDY:   STUDY_WEIGHTS,
+  READING: READING_WEIGHTS,
+  PRESENT: PRESENTATION_WEIGHTS,
 };
 
 export function useScoreFusion({
@@ -76,8 +118,9 @@ export function useScoreFusion({
 
     const components = { typingSpeed, typingConsistency, gaze, expression, noise, light };
 
-    // ── State-weighted focus ──
-    const weights = STATE_WEIGHTS[userState.state] ?? STATE_WEIGHTS[STATES.UNKNOWN];
+    // ── Mode-aware, state-weighted focus ──
+    const modeTable = WEIGHT_TABLES[podData.mode] ?? STUDY_WEIGHTS;
+    const weights   = modeTable[userState.state] ?? modeTable[STATES.UNKNOWN];
 
     let focusTarget;
     if (weights === null) {

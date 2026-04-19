@@ -7,11 +7,15 @@
  *   OLED     VCC -> 3.3V,  GND -> GND,  SDA -> GPIO8,  SCL -> GPIO9
  *   LDR      one leg -> 3.3V, other leg -> GPIO5 AND 10k to GND
  *   BUZZ     + -> GPIO15,    - -> GND   (active piezo buzzer, direct drive)
+ *   KY-040   VCC -> 3.3V,  GND -> GND,
+ *            CLK -> GPIO32, DT -> GPIO33, SW -> GPIO7 (pulled up internal)
  *
  * Serial protocol:
  *   -> BOOT                    at power up
  *   -> READY                   heartbeat every 5s
  *   -> DATA:<noise>,<light>    every 2s (0..4095 each)
+ *   -> MODE_PREVIEW:<name>     while rotating the knob (not yet committed)
+ *   -> MODE:<name>             when the knob is pressed (committed)
  *   <- FOCUS:<0..100>          updates the OLED
  *   <- BUZZ:<ms>               sound the buzzer for ms (clamped 30..2000)
  *   <- PING                    replied with PONG
@@ -38,6 +42,26 @@ bool oledOK = false;
 #define MIC_WINDOW_MS    40      // sample window for peak-to-peak
 #define HEARTBEAT_MS     2000    // emit "READY" periodically
 
+// --- KY-040 rotary encoder ---
+#define ENC_CLK          32
+#define ENC_DT           33
+#define ENC_SW           7
+#define ENC_DEBOUNCE_MS  2       // min gap between accepted CLK transitions
+#define BTN_DEBOUNCE_MS  40      // min hold before press registers
+#define MODE_FLASH_MS    1000    // OLED shows mode for this long after change
+
+const char* MODE_NAMES[] = { "STUDY", "READING", "PRESENT" };
+const int   MODE_COUNT   = 3;
+
+int  pendingMode   = 0;             // what the knob is pointing at (previewed)
+int  committedMode = 0;             // what's actually in effect
+int  lastClk       = HIGH;          // for edge detect on CLK
+unsigned long lastEncMs    = 0;     // encoder debounce timestamp
+int  lastBtn       = HIGH;          // for edge detect on SW
+unsigned long btnDownAt    = 0;     // millis when SW went LOW
+bool btnLatched    = false;         // true while we wait for release
+unsigned long modeFlashUntil = 0;   // OLED returns to score at this millis
+
 unsigned long lastSample    = 0;
 unsigned long lastHeartbeat = 0;
 unsigned long buzzUntil     = 0;     // millis() deadline to silence buzzer
@@ -47,6 +71,9 @@ bool hasScore        = false;
 
 void showSplash();
 void showScore(int score);
+void showMode(const char* name, bool committed);
+void setupEncoder();
+void readEncoder(unsigned long now);
 int  readMicPeakToPeak();
 
 void setup() {
@@ -67,6 +94,8 @@ void setup() {
     Serial.println("WARN:OLED_INIT_FAIL");
     // Do NOT hang — keep streaming sensor data.
   }
+
+  setupEncoder();
 }
 
 void loop() {
@@ -80,7 +109,8 @@ void loop() {
       if (v >= 0 && v <= 100) {
         lastFocusScore = v;
         hasScore = true;
-        if (oledOK) showScore(lastFocusScore);
+        // Don't clobber the mode-flash screen while it's up.
+        if (oledOK && modeFlashUntil == 0) showScore(lastFocusScore);
       }
     } else if (incoming.startsWith("BUZZ:")) {
       int ms = incoming.substring(5).toInt();
@@ -95,6 +125,18 @@ void loop() {
   }
 
   unsigned long now = millis();
+
+  // --- Encoder (non-blocking; can run every loop tick) ---
+  readEncoder(now);
+
+  // --- OLED flash auto-clear: return to score once the mode flash expires ---
+  if (modeFlashUntil != 0 && (long)(now - modeFlashUntil) >= 0) {
+    modeFlashUntil = 0;
+    if (oledOK) {
+      if (hasScore) showScore(lastFocusScore);
+      else          showSplash();
+    }
+  }
 
   // --- Buzzer auto-off (non-blocking) ---
   if (buzzActive && (long)(now - buzzUntil) >= 0) {
@@ -183,6 +225,88 @@ void showScore(int score) {
   if (score >= 70)      display.print("On track");
   else if (score >= 40) display.print("Drifting...");
   else                  display.print("Take a break");
+
+  display.display();
+}
+
+// ─────────────────────────────────────────────────────────
+// Rotary encoder — KY-040 on CLK/DT/SW
+//
+// Rotation previews a mode (emits MODE_PREVIEW:<name>).
+// Pressing the knob commits it (emits MODE:<name>).
+// Everything is non-blocking: the main loop keeps servicing
+// mic sampling, buzzer timeout, and inbound serial.
+// ─────────────────────────────────────────────────────────
+void setupEncoder() {
+  pinMode(ENC_CLK, INPUT);
+  pinMode(ENC_DT,  INPUT);
+  pinMode(ENC_SW,  INPUT_PULLUP);
+  lastClk = digitalRead(ENC_CLK);
+  lastBtn = digitalRead(ENC_SW);
+}
+
+void readEncoder(unsigned long now) {
+  // --- Rotation (CLK edge-detect, DT gives direction) ---
+  int clk = digitalRead(ENC_CLK);
+  if (clk != lastClk) {
+    // Falling edge is the "detent" on most KY-040 clones.
+    if (clk == LOW && (now - lastEncMs) >= ENC_DEBOUNCE_MS) {
+      int dt = digitalRead(ENC_DT);
+      if (dt == HIGH) pendingMode = (pendingMode + 1) % MODE_COUNT;
+      else            pendingMode = (pendingMode + MODE_COUNT - 1) % MODE_COUNT;
+
+      Serial.print("MODE_PREVIEW:");
+      Serial.println(MODE_NAMES[pendingMode]);
+
+      if (oledOK) showMode(MODE_NAMES[pendingMode], false);
+      modeFlashUntil = now + MODE_FLASH_MS;
+      lastEncMs = now;
+    }
+    lastClk = clk;
+  }
+
+  // --- Button (active-low with pull-up; press = LOW) ---
+  int btn = digitalRead(ENC_SW);
+  if (btn == LOW && lastBtn == HIGH) {
+    btnDownAt  = now;
+    btnLatched = false;
+  }
+  if (btn == LOW && !btnLatched && (now - btnDownAt) >= BTN_DEBOUNCE_MS) {
+    // Commit the previewed mode.
+    committedMode = pendingMode;
+    Serial.print("MODE:");
+    Serial.println(MODE_NAMES[committedMode]);
+
+    if (oledOK) showMode(MODE_NAMES[committedMode], true);
+    modeFlashUntil = now + MODE_FLASH_MS;
+    btnLatched = true;
+  }
+  if (btn == HIGH) {
+    btnLatched = false;
+  }
+  lastBtn = btn;
+}
+
+void showMode(const char* name, bool committed) {
+  if (!oledOK) return;
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print(committed ? "Mode locked" : "Mode preview");
+  display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
+
+  display.setTextSize(2);
+  int len = 0;
+  for (const char* p = name; *p; p++) len++;
+  int px = (128 - len * 12) / 2;
+  if (px < 0) px = 0;
+  display.setCursor(px, 20);
+  display.print(name);
+
+  display.setTextSize(1);
+  display.setCursor(0, 54);
+  display.print(committed ? "click-confirmed" : "click to confirm");
 
   display.display();
 }

@@ -51,6 +51,9 @@ export function Dashboard({
 
   return (
     <div className="space-y-6">
+      {/* Mode selector row (driven by the rotary knob) */}
+      <ModeSelector mode={podData.mode} pendingMode={podData.pendingMode} alive={podData.alive} />
+
       {/* State pill row */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium ${stateStyles[userState?.state] || stateStyles.UNKNOWN}`}>
@@ -237,6 +240,47 @@ function SignalPill({ label, value, unit, max, invert, hint, badBelow = 40, badA
         <span className="text-xs text-gray-500 ml-0.5">{unit}</span>
       </p>
       {hint && <p className="text-[10px] text-gray-600 mt-0.5">{hint}</p>}
+    </div>
+  );
+}
+
+// Drives off podData.mode (committed) and podData.pendingMode (knob-preview).
+// The committed mode glows; if the user is mid-scroll (pending != committed)
+// the pending mode shows a faint outline + "click knob to confirm" hint.
+function ModeSelector({ mode = 'STUDY', pendingMode = 'STUDY', alive }) {
+  const MODES = [
+    { key: 'STUDY',   label: 'Study',        hint: 'balanced · typing + gaze + focus signals' },
+    { key: 'READING', label: 'Reading',      hint: 'gaze + expression dominant · typing off' },
+    { key: 'PRESENT', label: 'Presentation', hint: 'no typing · calm + quiet + eye contact' },
+  ];
+  const previewing = pendingMode !== mode;
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-3">
+      <div className="flex items-center justify-between mb-2 px-1">
+        <p className="text-[10px] uppercase tracking-wider text-gray-500">Pod mode · rotary knob</p>
+        {!alive && <p className="text-[10px] text-gray-600">pod offline — last known</p>}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {MODES.map(m => {
+          const isCommitted = m.key === mode;
+          const isPending   = previewing && m.key === pendingMode;
+          const cls = isCommitted
+            ? 'border-blue-500 bg-blue-950 text-blue-200'
+            : isPending
+              ? 'border-dashed border-blue-700 bg-gray-900 text-blue-300'
+              : 'border-gray-800 bg-gray-900 text-gray-500';
+          return (
+            <div key={m.key} className={`border rounded-lg px-3 py-2 ${cls}`}>
+              <p className="text-sm font-medium tracking-wide">{m.label}</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">{m.hint}</p>
+              {isPending && (
+                <p className="text-[10px] text-blue-400 mt-1">click knob to confirm</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

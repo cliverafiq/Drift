@@ -2,6 +2,10 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 const EMA_ALPHA = 0.3;   // higher = more responsive, lower = smoother
 
+// Order must match MODE_NAMES in firmware: STUDY -> READING -> PRESENT.
+export const MODES = ['STUDY', 'READING', 'PRESENT'];
+const MODE_SET = new Set(MODES);
+
 export function useSerialPod() {
   const [podData, setPodData] = useState({
     noise: 0,
@@ -9,6 +13,8 @@ export function useSerialPod() {
     connected: false,
     alive: false,
     supported: typeof navigator !== 'undefined' && 'serial' in navigator,
+    mode: 'STUDY',         // committed mode (from MODE: lines)
+    pendingMode: 'STUDY',  // previewed mode (from MODE_PREVIEW: lines)
   });
 
   const portRef       = useRef(null);
@@ -73,6 +79,18 @@ export function useSerialPod() {
                 light: Math.round(lightEmaRef.current),
                 alive: true,
               }));
+            }
+          } else if (line.startsWith('MODE_PREVIEW:')) {
+            const m = line.slice(13).trim();
+            if (MODE_SET.has(m)) {
+              lastAliveRef.current = Date.now();
+              setPodData(prev => ({ ...prev, pendingMode: m, alive: true }));
+            }
+          } else if (line.startsWith('MODE:')) {
+            const m = line.slice(5).trim();
+            if (MODE_SET.has(m)) {
+              lastAliveRef.current = Date.now();
+              setPodData(prev => ({ ...prev, mode: m, pendingMode: m, alive: true }));
             }
           }
         }
